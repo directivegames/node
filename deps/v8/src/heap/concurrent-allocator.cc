@@ -41,7 +41,7 @@ void StressConcurrentAllocatorTask::RunInternal() {
       heap->CreateFillerObjectAtBackground(result.ToAddress(),
                                            kSmallObjectSize);
     } else {
-      local_heap.TryPerformCollection();
+      heap->CollectGarbageFromAnyThread(&local_heap);
     }
 
     result = local_heap.AllocateRaw(kMediumObjectSize, AllocationType::kOld,
@@ -51,7 +51,7 @@ void StressConcurrentAllocatorTask::RunInternal() {
       heap->CreateFillerObjectAtBackground(result.ToAddress(),
                                            kMediumObjectSize);
     } else {
-      local_heap.TryPerformCollection();
+      heap->CollectGarbageFromAnyThread(&local_heap);
     }
 
     result = local_heap.AllocateRaw(kLargeObjectSize, AllocationType::kOld,
@@ -61,7 +61,7 @@ void StressConcurrentAllocatorTask::RunInternal() {
       heap->CreateFillerObjectAtBackground(result.ToAddress(),
                                            kLargeObjectSize);
     } else {
-      local_heap.TryPerformCollection();
+      heap->CollectGarbageFromAnyThread(&local_heap);
     }
     local_heap.Safepoint();
   }
@@ -83,6 +83,11 @@ void ConcurrentAllocator::FreeLinearAllocationArea() {
   base::Optional<CodePageMemoryModificationScope> optional_scope;
   if (lab_.IsValid() && space_->identity() == CODE_SPACE) {
     optional_scope.emplace(MemoryChunk::FromAddress(lab_.top()));
+  }
+  if (lab_.top() != lab_.limit() &&
+      owning_heap()->incremental_marking()->black_allocation()) {
+    Page::FromAddress(lab_.top())
+        ->DestroyBlackAreaBackground(lab_.top(), lab_.limit());
   }
   lab_.CloseAndMakeIterable();
 }
@@ -142,20 +147,19 @@ bool ConcurrentAllocator::EnsureLab(AllocationOrigin origin) {
                                               kMaxLabSize, origin);
   if (!result) return false;
 
-  if (IsBlackAllocationEnabled()) {
-    Address top = result->first;
-    Address limit = top + result->second;
-    Page::FromAllocationAreaAddress(top)->CreateBlackAreaBackground(top, limit);
-  }
+  FreeLinearAllocationArea();
 
   HeapObject object = HeapObject::FromAddress(result->first);
-  LocalAllocationBuffer saved_lab = std::move(lab_);
   lab_ = LocalAllocationBuffer::FromResult(
       space_->heap(), AllocationResult::FromObject(object), result->second);
   DCHECK(lab_.IsValid());
-  if (!lab_.TryMerge(&saved_lab)) {
-    saved_lab.CloseAndMakeIterable();
+
+  if (IsBlackAllocationEnabled()) {
+    Address top = lab_.top();
+    Address limit = lab_.limit();
+    Page::FromAllocationAreaAddress(top)->CreateBlackAreaBackground(top, limit);
   }
+
   return true;
 }
 

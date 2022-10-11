@@ -86,6 +86,7 @@ class MaglevGraphVerifier {
       case Opcode::kCreateObjectLiteral:
       case Opcode::kCreateShallowObjectLiteral:
       case Opcode::kCreateRegExpLiteral:
+      case Opcode::kDebugBreak:
       case Opcode::kDeopt:
       case Opcode::kFloat64Constant:
       case Opcode::kGapMove:
@@ -122,6 +123,7 @@ class MaglevGraphVerifier {
       case Opcode::kCheckString:
       case Opcode::kCheckSymbol:
       case Opcode::kCheckedInternalizedString:
+      case Opcode::kCheckedObjectToIndex:
       // TODO(victorgomes): Can we check that the input is Boolean?
       case Opcode::kBranchIfToBooleanTrue:
       case Opcode::kBranchIfRootConstant:
@@ -152,6 +154,7 @@ class MaglevGraphVerifier {
         CheckValueInputIs(node, 0, ValueRepresentation::kInt32);
         break;
       case Opcode::kFloat64Box:
+      case Opcode::kCheckedTruncateFloat64ToInt32:
         DCHECK_EQ(node->input_count(), 1);
         CheckValueInputIs(node, 0, ValueRepresentation::kFloat64);
         break;
@@ -176,10 +179,6 @@ class MaglevGraphVerifier {
       case Opcode::kGenericLessThan:
       case Opcode::kGenericLessThanOrEqual:
       case Opcode::kGenericStrictEqual:
-      case Opcode::kCheckJSArrayBounds:
-      case Opcode::kCheckJSObjectElementsBounds:
-      case Opcode::kLoadTaggedElement:
-      case Opcode::kLoadDoubleElement:
       case Opcode::kGetIterator:
       case Opcode::kTaggedEqual:
       case Opcode::kTaggedNotEqual:
@@ -274,6 +273,14 @@ class MaglevGraphVerifier {
         for (int i = 0; i < node->input_count(); i++) {
           CheckValueInputIs(node, i, ValueRepresentation::kTagged);
         }
+        break;
+      case Opcode::kCheckJSArrayBounds:
+      case Opcode::kCheckJSObjectElementsBounds:
+      case Opcode::kLoadTaggedElement:
+      case Opcode::kLoadDoubleElement:
+        DCHECK_EQ(node->input_count(), 2);
+        CheckValueInputIs(node, 0, ValueRepresentation::kTagged);
+        CheckValueInputIs(node, 1, ValueRepresentation::kInt32);
         break;
       case Opcode::kCallBuiltin: {
         CallBuiltin* call_builtin = node->Cast<CallBuiltin>();

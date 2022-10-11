@@ -476,6 +476,19 @@ void TurboAssembler::Mulh_d(Register rd, Register rj, const Operand& rk) {
   }
 }
 
+void TurboAssembler::Mulh_du(Register rd, Register rj, const Operand& rk) {
+  if (rk.is_reg()) {
+    mulh_du(rd, rj, rk.rm());
+  } else {
+    // li handles the relocation.
+    UseScratchRegisterScope temps(this);
+    Register scratch = temps.Acquire();
+    DCHECK(rj != scratch);
+    li(scratch, rk);
+    mulh_du(rd, rj, scratch);
+  }
+}
+
 void TurboAssembler::Div_w(Register rd, Register rj, const Operand& rk) {
   if (rk.is_reg()) {
     div_w(rd, rj, rk.rm());
@@ -3292,6 +3305,38 @@ void TurboAssembler::MulOverflow_w(Register dst, Register left,
   xor_(overflow, overflow, scratch2);
 }
 
+void TurboAssembler::MulOverflow_d(Register dst, Register left,
+                                   const Operand& right, Register overflow) {
+  ASM_CODE_COMMENT(this);
+  BlockTrampolinePoolScope block_trampoline_pool(this);
+  UseScratchRegisterScope temps(this);
+  Register scratch = temps.Acquire();
+  Register scratch2 = temps.Acquire();
+  Register right_reg = no_reg;
+  if (!right.is_reg()) {
+    li(scratch, Operand(right));
+    right_reg = scratch;
+  } else {
+    right_reg = right.rm();
+  }
+
+  DCHECK(left != scratch2 && right_reg != scratch2 && dst != scratch2 &&
+         overflow != scratch2);
+  DCHECK(overflow != left && overflow != right_reg);
+
+  if (dst == left || dst == right_reg) {
+    Mul_d(scratch2, left, right_reg);
+    Mulh_d(overflow, left, right_reg);
+    mov(dst, scratch2);
+  } else {
+    Mul_d(dst, left, right_reg);
+    Mulh_d(overflow, left, right_reg);
+  }
+
+  srai_d(scratch2, dst, 63);
+  xor_(overflow, overflow, scratch2);
+}
+
 void MacroAssembler::CallRuntime(const Runtime::Function* f, int num_arguments,
                                  SaveFPRegsMode save_doubles) {
   ASM_CODE_COMMENT(this);
@@ -4270,7 +4315,7 @@ void MacroAssembler::LoadFeedbackVectorFlagsAndJumpIfNeedsProcessing(
   Branch(flags_need_processing, ne, scratch, Operand(zero_reg));
 }
 
-void MacroAssembler::MaybeOptimizeCodeOrTailCallOptimizedCodeSlot(
+void MacroAssembler::OptimizeCodeOrTailCallOptimizedCodeSlot(
     Register flags, Register feedback_vector) {
   ASM_CODE_COMMENT(this);
   DCHECK(!AreAliased(flags, feedback_vector));

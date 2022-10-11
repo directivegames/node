@@ -96,7 +96,7 @@ class MaglevGraphBuilder {
     if (has_graph_labeller()) {
       for (Phi* phi : *merge_states_[offset]->phis()) {
         graph_labeller()->RegisterNode(phi);
-        if (FLAG_trace_maglev_graph_building) {
+        if (v8_flags.trace_maglev_graph_building) {
           std::cout << "  " << phi << "  "
                     << PrintNodeLabel(graph_labeller(), phi) << ": "
                     << PrintNode(graph_labeller(), phi) << std::endl;
@@ -147,7 +147,7 @@ class MaglevGraphBuilder {
     if (has_graph_labeller()) {
       for (Phi* phi : *merge_states_[offset]->phis()) {
         graph_labeller()->RegisterNode(phi);
-        if (FLAG_trace_maglev_graph_building) {
+        if (v8_flags.trace_maglev_graph_building) {
           std::cout << "  " << phi << "  "
                     << PrintNodeLabel(graph_labeller(), phi) << ": "
                     << PrintNode(graph_labeller(), phi) << std::endl;
@@ -174,7 +174,7 @@ class MaglevGraphBuilder {
 
   void MarkBytecodeDead() {
     DCHECK_NULL(current_block_);
-    if (FLAG_trace_maglev_graph_building) {
+    if (v8_flags.trace_maglev_graph_building) {
       std::cout << "== Dead ==\n"
                 << std::setw(4) << iterator_.current_offset() << " : ";
       interpreter::BytecodeDecoder::Decode(std::cout,
@@ -207,31 +207,6 @@ class MaglevGraphBuilder {
       // Any other bytecode that doesn't return or throw will merge into the
       // fallthrough.
       MergeDeadIntoFrameState(iterator_.next_offset());
-    } else if (bytecode == interpreter::Bytecode::kSuspendGenerator) {
-      // Extra special case for SuspendGenerator, if the suspend is dead then
-      // the resume has to be dead too. However, the resume already has a merge
-      // state, with exactly one predecessor (the generator switch), so it will
-      // be revived along the standard path. This can cause havoc if e.g. the
-      // suspend/resume are inside a dead loop, because the JumpLoop can become
-      // live again.
-      //
-      // So, manually advance the iterator to the resume, go through the motions
-      // of processing the merge state, but immediately emit an unconditional
-      // deopt (which also kills the resume).
-      iterator_.Advance();
-      DCHECK_EQ(iterator_.current_bytecode(),
-                interpreter::Bytecode::kResumeGenerator);
-      int resume_offset = iterator_.current_offset();
-      DCHECK_EQ(NumPredecessors(resume_offset), 1);
-      ProcessMergePoint(resume_offset);
-      StartNewBlock(resume_offset);
-      // TODO(v8:7700): This approach is not ideal. We can create a deopt-reopt
-      // loop: the interpreted code runs, creates a generator while feedback is
-      // still not yet allocated, then suspends the generator, tiers up to
-      // maglev, and reaches this deopt. We then deopt, but since the generator
-      // is never created again, we re-opt without the suspend part and we loop!
-      EmitUnconditionalDeopt(DeoptimizeReason::kSuspendGeneratorIsDead);
-      return;
     }
 
     // TODO(leszeks): We could now continue iterating the bytecode
@@ -250,7 +225,7 @@ class MaglevGraphBuilder {
         merge_state->Merge(*compilation_unit_, current_interpreter_frame_,
                            graph()->last_block(), offset);
       }
-      if (FLAG_trace_maglev_graph_building) {
+      if (v8_flags.trace_maglev_graph_building) {
         auto detail = merge_state->is_exception_handler() ? "exception handler"
                       : merge_state->is_loop()            ? "loop header"
                                                           : "merge";
@@ -316,7 +291,7 @@ class MaglevGraphBuilder {
     }
 
     DCHECK_NOT_NULL(current_block_);
-    if (FLAG_trace_maglev_graph_building) {
+    if (v8_flags.trace_maglev_graph_building) {
       std::cout << std::setw(4) << iterator_.current_offset() << " : ";
       interpreter::BytecodeDecoder::Decode(std::cout,
                                            iterator_.current_address());
@@ -352,7 +327,7 @@ class MaglevGraphBuilder {
     }
     current_block_->nodes().Add(node);
     if (has_graph_labeller()) graph_labeller()->RegisterNode(node);
-    if (FLAG_trace_maglev_graph_building) {
+    if (v8_flags.trace_maglev_graph_building) {
       std::cout << "  " << node << "  "
                 << PrintNodeLabel(graph_labeller(), node) << ": "
                 << PrintNode(graph_labeller(), node) << std::endl;
@@ -407,6 +382,13 @@ class MaglevGraphBuilder {
     }
     return node;
   }
+
+  enum ContextSlotMutability { kImmutable, kMutable };
+  bool TrySpecializeLoadContextSlotToFunctionContext(
+      ValueNode** context, size_t* depth, int slot_index,
+      ContextSlotMutability slot_mutability);
+  void BuildLoadContextSlot(ValueNode* context, size_t depth, int slot_index,
+                            ContextSlotMutability slot_mutability);
 
   template <Builtin kBuiltin>
   CallBuiltin* BuildCallBuiltin(std::initializer_list<ValueNode*> inputs) {
@@ -621,78 +603,52 @@ class MaglevGraphBuilder {
     current_interpreter_frame_.set(dst, current_interpreter_frame_.get(src));
   }
 
-  template <typename NodeT>
-  ValueNode* AddNewConversionNode(interpreter::Register reg, ValueNode* node) {
-    // TODO(v8:7700): Use a canonical conversion node. Maybe like in Phi nodes
-    // where we always add a the conversion immediately after the ValueNode.
-    DCHECK(NodeT::kProperties.is_conversion());
-    ValueNode* result = AddNewNode<NodeT>({node});
-    current_interpreter_frame_.set(reg, result);
-    return result;
-  }
-
-  ValueNode* GetTaggedValueHelper(interpreter::Register reg, ValueNode* value) {
-    // TODO(victorgomes): Consider adding the representation in the
-    // InterpreterFrameState, so that we don't need to derefence a node.
+  ValueNode* GetTaggedValue(interpreter::Register reg) {
+    ValueNode* value = current_interpreter_frame_.get(reg);
     switch (value->properties().value_representation()) {
       case ValueRepresentation::kTagged:
         return value;
       case ValueRepresentation::kInt32: {
-        if (value->Is<CheckedSmiUntag>()) {
-          return value->input(0).node();
+        NodeInfo* node_info = known_node_aspects().GetOrCreateInfoFor(value);
+        if (node_info->tagged_alternative == nullptr) {
+          node_info->tagged_alternative = AddNewNode<CheckedSmiTag>({value});
         }
-        return AddNewConversionNode<CheckedSmiTag>(reg, value);
+        return node_info->tagged_alternative;
       }
       case ValueRepresentation::kFloat64: {
-        if (value->Is<CheckedFloat64Unbox>()) {
-          return value->input(0).node();
+        NodeInfo* node_info = known_node_aspects().GetOrCreateInfoFor(value);
+        if (node_info->tagged_alternative == nullptr) {
+          node_info->tagged_alternative = AddNewNode<Float64Box>({value});
         }
-        if (value->Is<ChangeInt32ToFloat64>()) {
-          ValueNode* int32_value = value->input(0).node();
-          return GetTaggedValueHelper(reg, int32_value);
-        }
-        return AddNewConversionNode<Float64Box>(reg, value);
+        return node_info->tagged_alternative;
       }
     }
     UNREACHABLE();
-  }
-
-  ValueNode* GetTaggedValue(interpreter::Register reg) {
-    ValueNode* value = current_interpreter_frame_.get(reg);
-    return GetTaggedValueHelper(reg, value);
-  }
-
-  template <typename ConversionNodeT>
-  ValueNode* GetValue(interpreter::Register reg) {
-    ValueNode* value = current_interpreter_frame_.get(reg);
-    return AddNewConversionNode<ConversionNodeT>(reg, value);
   }
 
   ValueNode* GetInt32(interpreter::Register reg) {
     ValueNode* value = current_interpreter_frame_.get(reg);
     switch (value->properties().value_representation()) {
       case ValueRepresentation::kTagged: {
-        if (value->Is<CheckedSmiTag>()) {
-          return value->input(0).node();
-        } else if (SmiConstant* constant = value->TryCast<SmiConstant>()) {
+        if (SmiConstant* constant = value->TryCast<SmiConstant>()) {
           return GetInt32Constant(constant->value().value());
         }
-        return AddNewConversionNode<CheckedSmiUntag>(reg, value);
+        NodeInfo* node_info = known_node_aspects().GetOrCreateInfoFor(value);
+        if (node_info->int32_alternative == nullptr) {
+          node_info->int32_alternative = AddNewNode<CheckedSmiUntag>({value});
+        }
+        return node_info->int32_alternative;
       }
       case ValueRepresentation::kInt32:
         return value;
-      case ValueRepresentation::kFloat64:
-        // We should not be able to request an Int32 from a Float64 input,
-        // unless it's an unboxing of a tagged value or a conversion from int32.
-        if (value->Is<CheckedFloat64Unbox>()) {
-          // TODO(leszeks): Maybe convert the CheckedFloat64Unbox to
-          // ChangeInt32ToFloat64 with this CheckedSmiUntag as the input.
-          return AddNewConversionNode<CheckedSmiUntag>(reg,
-                                                       value->input(0).node());
-        } else if (value->Is<ChangeInt32ToFloat64>()) {
-          return value->input(0).node();
+      case ValueRepresentation::kFloat64: {
+        NodeInfo* node_info = known_node_aspects().GetOrCreateInfoFor(value);
+        if (node_info->int32_alternative == nullptr) {
+          node_info->int32_alternative =
+              AddNewNode<CheckedTruncateFloat64ToInt32>({value});
         }
-        UNREACHABLE();
+        return node_info->int32_alternative;
+      }
     }
     UNREACHABLE();
   }
@@ -701,23 +657,25 @@ class MaglevGraphBuilder {
     ValueNode* value = current_interpreter_frame_.get(reg);
     switch (value->properties().value_representation()) {
       case ValueRepresentation::kTagged: {
-        if (value->Is<Float64Box>()) {
-          return value->input(0).node();
+        NodeInfo* node_info = known_node_aspects().GetOrCreateInfoFor(value);
+        if (node_info->float64_alternative == nullptr) {
+          node_info->float64_alternative =
+              AddNewNode<CheckedFloat64Unbox>({value});
         }
-        return AddNewConversionNode<CheckedFloat64Unbox>(reg, value);
+        return node_info->float64_alternative;
       }
-      case ValueRepresentation::kInt32:
-        return AddNewConversionNode<ChangeInt32ToFloat64>(reg, value);
+      case ValueRepresentation::kInt32: {
+        NodeInfo* node_info = known_node_aspects().GetOrCreateInfoFor(value);
+        if (node_info->float64_alternative == nullptr) {
+          node_info->float64_alternative =
+              AddNewNode<ChangeInt32ToFloat64>({value});
+        }
+        return node_info->float64_alternative;
+      }
       case ValueRepresentation::kFloat64:
         return value;
     }
     UNREACHABLE();
-  }
-
-  template <typename ConversionNodeT>
-  ValueNode* GetAccumulator() {
-    return GetValue<ConversionNodeT>(
-        interpreter::Register::virtual_accumulator());
   }
 
   ValueNode* GetAccumulatorTagged() {
@@ -736,12 +694,6 @@ class MaglevGraphBuilder {
     interpreter::Register source = iterator_.GetRegisterOperand(operand_index);
     return current_interpreter_frame_.get(source) ==
            current_interpreter_frame_.accumulator();
-  }
-
-  template <typename ConversionNodeT>
-  ValueNode* LoadRegister(int operand_index) {
-    return GetValue<ConversionNodeT>(
-        iterator_.GetRegisterOperand(operand_index));
   }
 
   ValueNode* LoadRegisterTagged(int operand_index) {
@@ -776,6 +728,8 @@ class MaglevGraphBuilder {
     // would be emitted between these two nodes.
     if (result->opcode() == Opcode::kCallRuntime) {
       DCHECK_EQ(result->Cast<CallRuntime>()->ReturnCount(), 2);
+    } else if (result->opcode() == Opcode::kCallBuiltin) {
+      DCHECK_EQ(result->Cast<CallBuiltin>()->ReturnCount(), 2);
     } else {
       DCHECK_EQ(result->opcode(), Opcode::kForInPrepare);
     }
@@ -902,7 +856,7 @@ class MaglevGraphBuilder {
     graph()->Add(block);
     if (has_graph_labeller()) {
       graph_labeller()->RegisterBasicBlock(block);
-      if (FLAG_trace_maglev_graph_building) {
+      if (v8_flags.trace_maglev_graph_building) {
         bool kSkipTargets = true;
         std::cout << "  " << control_node << "  "
                   << PrintNodeLabel(graph_labeller(), control_node) << ": "
@@ -940,7 +894,7 @@ class MaglevGraphBuilder {
     DCHECK_NULL(current_block_);
     if (std::is_base_of<ConditionalControlNode, ControlNodeT>::value) {
       if (NumPredecessors(next_block_offset) == 1) {
-        if (FLAG_trace_maglev_graph_building) {
+        if (v8_flags.trace_maglev_graph_building) {
           std::cout << "== New block (single fallthrough) ==" << std::endl;
         }
         StartNewBlock(next_block_offset);
@@ -970,6 +924,7 @@ class MaglevGraphBuilder {
 
   bool TryBuildMonomorphicLoad(ValueNode* receiver,
                                ValueNode* lookup_start_object,
+                               const compiler::NameRef& name,
                                const compiler::MapRef& map,
                                MaybeObjectHandle handler);
   bool TryBuildMonomorphicLoadFromSmiHandler(ValueNode* receiver,
@@ -978,6 +933,7 @@ class MaglevGraphBuilder {
                                              int32_t handler);
   bool TryBuildMonomorphicLoadFromLoadHandler(ValueNode* receiver,
                                               ValueNode* lookup_start_object,
+                                              const compiler::NameRef& name,
                                               const compiler::MapRef& map,
                                               LoadHandler handler);
 

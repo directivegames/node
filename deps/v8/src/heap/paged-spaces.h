@@ -280,7 +280,7 @@ class V8_EXPORT_PRIVATE PagedSpaceBase
 
   // Refills the free list from the corresponding free list filled by the
   // sweeper.
-  void RefillFreeList(Sweeper* sweeper);
+  void RefillFreeList();
 
   base::Mutex* mutex() { return &space_mutex_; }
 
@@ -352,10 +352,6 @@ class V8_EXPORT_PRIVATE PagedSpaceBase
   virtual bool snapshotable() const { return true; }
 
   bool HasPages() const { return first_page() != nullptr; }
-
-  // Returns whether sweeping of this space is safe on this thread. Code space
-  // sweeping is only allowed on the main thread.
-  bool IsSweepingAllowedOnThread(LocalHeap* local_heap) const;
 
   // Cleans up the space, frees all pages in this space except those belonging
   // to the initial chunk, uncommits addresses in the initial chunk.
@@ -483,7 +479,9 @@ class CompactionSpaceCollection : public Malloced {
         map_space_(heap, MAP_SPACE, Executability::NOT_EXECUTABLE,
                    compaction_space_kind),
         code_space_(heap, CODE_SPACE, Executability::EXECUTABLE,
-                    compaction_space_kind) {}
+                    compaction_space_kind),
+        shared_space_(heap, SHARED_SPACE, Executability::NOT_EXECUTABLE,
+                      compaction_space_kind) {}
 
   CompactionSpace* Get(AllocationSpace space) {
     switch (space) {
@@ -493,6 +491,8 @@ class CompactionSpaceCollection : public Malloced {
         return &map_space_;
       case CODE_SPACE:
         return &code_space_;
+      case SHARED_SPACE:
+        return &shared_space_;
       default:
         UNREACHABLE();
     }
@@ -503,6 +503,7 @@ class CompactionSpaceCollection : public Malloced {
   CompactionSpace old_space_;
   CompactionSpace map_space_;
   CompactionSpace code_space_;
+  CompactionSpace shared_space_;
 };
 
 // -----------------------------------------------------------------------------
@@ -554,7 +555,9 @@ class MapSpace final : public PagedSpace {
                    paged_allocation_info_) {}
 
   int RoundSizeDownToObjectAlignment(int size) const override {
-    if (base::bits::IsPowerOfTwo(Map::kSize)) {
+    if (V8_COMPRESS_POINTERS_8GB_BOOL) {
+      return RoundDown(size, kObjectAlignment8GbHeap);
+    } else if (base::bits::IsPowerOfTwo(Map::kSize)) {
       return RoundDown(size, Map::kSize);
     } else {
       return (size / Map::kSize) * Map::kSize;
@@ -569,6 +572,32 @@ class MapSpace final : public PagedSpace {
 
  private:
   LinearAllocationArea paged_allocation_info_;
+};
+
+// -----------------------------------------------------------------------------
+// Shared space regular object space.
+
+class SharedSpace final : public PagedSpace {
+ public:
+  // Creates an old space object. The constructor does not allocate pages
+  // from OS.
+  explicit SharedSpace(Heap* heap)
+      : PagedSpace(heap, SHARED_SPACE, NOT_EXECUTABLE,
+                   FreeList::CreateFreeList(), allocation_info) {}
+
+  static bool IsAtPageStart(Address addr) {
+    return static_cast<intptr_t>(addr & kPageAlignmentMask) ==
+           MemoryChunkLayout::ObjectStartOffsetInDataPage();
+  }
+
+  size_t ExternalBackingStoreBytes(ExternalBackingStoreType type) const final {
+    if (type == ExternalBackingStoreType::kArrayBuffer) return 0;
+    DCHECK_EQ(type, ExternalBackingStoreType::kExternalString);
+    return external_backing_store_bytes_[type];
+  }
+
+ private:
+  LinearAllocationArea allocation_info;
 };
 
 // Iterates over the chunks (pages and large object pages) that can contain

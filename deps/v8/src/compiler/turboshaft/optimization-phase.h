@@ -111,7 +111,7 @@ class OptimizationPhase {
   static void Run(Graph* input, Zone* phase_zone, NodeOriginTable* origins,
                   VisitOrder visit_order = VisitOrder::kAsEmitted) {
     Impl phase{*input, phase_zone, origins, visit_order};
-    if (FLAG_turboshaft_trace_reduction) {
+    if (v8_flags.turboshaft_trace_reduction) {
       phase.template Run<true>();
     } else {
       phase.template Run<false>();
@@ -290,12 +290,13 @@ struct OptimizationPhase<Analyzer, Assembler>::Impl {
 
   V8_INLINE OpIndex ReduceGoto(const GotoOp& op) {
     Block* destination = MapToNewGraph(op.destination->index());
+    assembler.current_block()->SetOrigin(current_input_block);
+    assembler.Goto(destination);
     if (destination->IsBound()) {
       DCHECK(destination->IsLoop());
       FixLoopPhis(destination);
     }
-    assembler.current_block()->SetOrigin(current_input_block);
-    return assembler.Goto(destination);
+    return OpIndex::Invalid();
   }
   V8_INLINE OpIndex ReduceBranch(const BranchOp& op) {
     Block* if_true = MapToNewGraph(op.if_true->index());
@@ -402,6 +403,11 @@ struct OptimizationPhase<Analyzer, Assembler>::Impl {
     auto arguments = MapToNewGraph<16>(op.arguments());
     return assembler.Call(callee, base::VectorOf(arguments), op.descriptor);
   }
+  OpIndex ReduceTailCall(const TailCallOp& op) {
+    OpIndex callee = MapToNewGraph(op.callee());
+    auto arguments = MapToNewGraph<16>(op.arguments());
+    return assembler.TailCall(callee, base::VectorOf(arguments), op.descriptor);
+  }
   OpIndex ReduceReturn(const ReturnOp& op) {
     // We very rarely have tuples longer than 4.
     auto return_values = MapToNewGraph<4>(op.return_values());
@@ -440,17 +446,27 @@ struct OptimizationPhase<Analyzer, Assembler>::Impl {
   OpIndex ReduceTaggedBitcast(const TaggedBitcastOp& op) {
     return assembler.TaggedBitcast(MapToNewGraph(op.input()), op.from, op.to);
   }
+  OpIndex ReduceSelect(const SelectOp& op) {
+    return assembler.Select(MapToNewGraph(op.condition()),
+                            MapToNewGraph(op.left()), MapToNewGraph(op.right()),
+                            op.rep);
+  }
   OpIndex ReduceConstant(const ConstantOp& op) {
     return assembler.Constant(op.kind, op.storage);
   }
   OpIndex ReduceLoad(const LoadOp& op) {
     return assembler.Load(MapToNewGraph(op.base()), op.kind, op.loaded_rep,
-                          op.offset);
+                          op.result_rep, op.offset);
   }
   OpIndex ReduceIndexedLoad(const IndexedLoadOp& op) {
     return assembler.IndexedLoad(
         MapToNewGraph(op.base()), MapToNewGraph(op.index()), op.kind,
-        op.loaded_rep, op.offset, op.element_size_log2);
+        op.loaded_rep, op.result_rep, op.offset, op.element_size_log2);
+  }
+  OpIndex ReduceProtectedLoad(const ProtectedLoadOp& op) {
+    return assembler.ProtectedLoad(MapToNewGraph(op.base()),
+                                   MapToNewGraph(op.index()), op.loaded_rep,
+                                   op.result_rep);
   }
   OpIndex ReduceStore(const StoreOp& op) {
     return assembler.Store(MapToNewGraph(op.base()), MapToNewGraph(op.value()),
@@ -461,6 +477,11 @@ struct OptimizationPhase<Analyzer, Assembler>::Impl {
         MapToNewGraph(op.base()), MapToNewGraph(op.index()),
         MapToNewGraph(op.value()), op.kind, op.stored_rep, op.write_barrier,
         op.offset, op.element_size_log2);
+  }
+  OpIndex ReduceProtectedStore(const ProtectedStoreOp& op) {
+    return assembler.ProtectedStore(MapToNewGraph(op.base()),
+                                    MapToNewGraph(op.index()),
+                                    MapToNewGraph(op.value()), op.stored_rep);
   }
   OpIndex ReduceRetain(const RetainOp& op) {
     return assembler.Retain(MapToNewGraph(op.retained()));
@@ -492,6 +513,10 @@ struct OptimizationPhase<Analyzer, Assembler>::Impl {
     return assembler.DeoptimizeIf(MapToNewGraph(op.condition()),
                                   MapToNewGraph(op.frame_state()), op.negated,
                                   op.parameters);
+  }
+  OpIndex ReduceTrapIf(const TrapIfOp& op) {
+    return assembler.TrapIf(MapToNewGraph(op.condition()), op.negated,
+                            op.trap_id);
   }
   OpIndex ReduceTuple(const TupleOp& op) {
     return assembler.Tuple(base::VectorOf(MapToNewGraph<4>(op.inputs())));

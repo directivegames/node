@@ -585,6 +585,11 @@ ExternalReference ExternalReference::address_of_log_or_trace_osr() {
   return ExternalReference(&v8_flags.log_or_trace_osr);
 }
 
+ExternalReference
+ExternalReference::address_of_FLAG_harmony_symbol_as_weakmap_key() {
+  return ExternalReference(&FLAG_harmony_symbol_as_weakmap_key);
+}
+
 ExternalReference ExternalReference::address_of_builtin_subclassing_flag() {
   return ExternalReference(&v8_flags.builtin_subclassing);
 }
@@ -1022,6 +1027,8 @@ FUNCTION_REFERENCE(try_string_to_index_or_lookup_existing,
                    StringTable::TryStringToIndexOrLookupExisting)
 FUNCTION_REFERENCE(string_from_forward_table,
                    StringForwardingTable::GetForwardStringAddress)
+FUNCTION_REFERENCE(raw_hash_from_forward_table,
+                   StringForwardingTable::GetRawHashStatic)
 FUNCTION_REFERENCE(string_to_array_index_function, String::ToArrayIndex)
 FUNCTION_REFERENCE(array_indexof_includes_smi_or_object,
                    ArrayIndexOfIncludesSmiOrObject)

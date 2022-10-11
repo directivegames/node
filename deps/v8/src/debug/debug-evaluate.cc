@@ -246,7 +246,8 @@ DebugEvaluate::ContextBuilder::ContextBuilder(Isolate* isolate,
     if (scope_iterator_.HasContext()) {
       context_chain_element.wrapped_context = scope_iterator_.CurrentContext();
     }
-    if (!scope_iterator_.InInnerScope()) {
+    if (!scope_iterator_.InInnerScope() &&
+        !v8_flags.experimental_reuse_locals_blocklists) {
       context_chain_element.blocklist = scope_iterator_.GetLocals();
     }
     context_chain_.push_back(context_chain_element);
@@ -407,7 +408,7 @@ bool DebugEvaluate::IsSideEffectFreeIntrinsic(Runtime::FunctionId id) {
     INLINE_INTRINSIC_ALLOWLIST(INLINE_CASE)
     return true;
     default:
-      if (FLAG_trace_side_effect_free_debug_evaluate) {
+      if (v8_flags.trace_side_effect_free_debug_evaluate) {
         PrintF("[debug-evaluate] intrinsic %s may cause side effect.\n",
                Runtime::FunctionForId(id)->name);
       }
@@ -573,6 +574,8 @@ DebugInfo::SideEffectState BuiltinGetSideEffectState(Builtin id) {
     case Builtin::kArrayPrototypeFlat:
     case Builtin::kArrayPrototypeFlatMap:
     case Builtin::kArrayPrototypeJoin:
+    case Builtin::kArrayPrototypeGroup:
+    case Builtin::kArrayPrototypeGroupToMap:
     case Builtin::kArrayPrototypeKeys:
     case Builtin::kArrayPrototypeLastIndexOf:
     case Builtin::kArrayPrototypeSlice:
@@ -975,7 +978,7 @@ DebugInfo::SideEffectState BuiltinGetSideEffectState(Builtin id) {
       return DebugInfo::kRequiresRuntimeChecks;
 
     default:
-      if (FLAG_trace_side_effect_free_debug_evaluate) {
+      if (v8_flags.trace_side_effect_free_debug_evaluate) {
         PrintF("[debug-evaluate] built-in %s may cause side effect.\n",
                Builtins::name(id));
       }
@@ -1003,7 +1006,7 @@ bool BytecodeRequiresRuntimeCheck(interpreter::Bytecode bytecode) {
 // static
 DebugInfo::SideEffectState DebugEvaluate::FunctionGetSideEffectState(
     Isolate* isolate, Handle<SharedFunctionInfo> info) {
-  if (FLAG_trace_side_effect_free_debug_evaluate) {
+  if (v8_flags.trace_side_effect_free_debug_evaluate) {
     PrintF("[debug-evaluate] Checking function %s for side effect.\n",
            info->DebugNameCStr().get());
   }
@@ -1014,7 +1017,7 @@ DebugInfo::SideEffectState DebugEvaluate::FunctionGetSideEffectState(
     // Check bytecodes against allowlist.
     Handle<BytecodeArray> bytecode_array(info->GetBytecodeArray(isolate),
                                          isolate);
-    if (FLAG_trace_side_effect_free_debug_evaluate) {
+    if (v8_flags.trace_side_effect_free_debug_evaluate) {
       bytecode_array->Print();
     }
     bool requires_runtime_checks = false;
@@ -1027,7 +1030,7 @@ DebugInfo::SideEffectState DebugEvaluate::FunctionGetSideEffectState(
         continue;
       }
 
-      if (FLAG_trace_side_effect_free_debug_evaluate) {
+      if (v8_flags.trace_side_effect_free_debug_evaluate) {
         PrintF("[debug-evaluate] bytecode %s may cause side effect.\n",
                interpreter::Bytecodes::ToString(bytecode));
       }

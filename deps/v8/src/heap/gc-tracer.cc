@@ -762,14 +762,14 @@ void GCTracer::PrintNVP() const {
           "holes_size_after=%zu "
           "allocated=%zu "
           "promoted=%zu "
-          "semi_space_copied=%zu "
+          "new_space_survived=%zu "
           "nodes_died_in_new=%d "
           "nodes_copied_in_new=%d "
           "nodes_promoted=%d "
           "promotion_ratio=%.1f%% "
           "average_survival_ratio=%.1f%% "
           "promotion_rate=%.1f%% "
-          "semi_space_copy_rate=%.1f%% "
+          "new_space_survive_rate_=%.1f%% "
           "new_space_allocation_throughput=%.1f "
           "unmapper_chunks=%d\n",
           duration, spent_in_mutator, current_.TypeName(true),
@@ -800,11 +800,11 @@ void GCTracer::PrintNVP() const {
           current_.end_object_size, current_.start_holes_size,
           current_.end_holes_size, allocated_since_last_gc,
           heap_->promoted_objects_size(),
-          heap_->semi_space_copied_object_size(),
+          heap_->new_space_surviving_object_size(),
           heap_->nodes_died_in_new_space_, heap_->nodes_copied_in_new_space_,
           heap_->nodes_promoted_, heap_->promotion_ratio_,
           AverageSurvivalRatio(), heap_->promotion_rate_,
-          heap_->semi_space_copied_rate_,
+          heap_->new_space_surviving_rate_,
           NewSpaceAllocationThroughputInBytesPerMillisecond(),
           heap_->memory_allocator()->unmapper()->NumberOfChunks());
       break;
@@ -817,46 +817,93 @@ void GCTracer::PrintNVP() const {
           "minor_mc=%.2f "
           "time_to_safepoint=%.2f "
           "mark=%.2f "
+          "mark.incremental_roots=%.2f "
+          "mark.finish_incremental=%.2f "
           "mark.seed=%.2f "
-          "mark.roots=%.2f "
-          "mark.weak=%.2f "
+          "mark.closure_parallel=%.2f "
+          "mark.closure=%.2f "
           "mark.global_handles=%.2f "
           "clear=%.2f "
           "clear.string_table=%.2f "
-          "clear.weak_lists=%.2f "
+          "complete.sweep_array_buffers=%.2f "
           "evacuate=%.2f "
+          "evacuate.clean_up=%.2f "
           "evacuate.copy=%.2f "
+          "evacuate.prologue=%.2f "
+          "evacuate.epilogue=%.2f "
+          "evacuate.rebalance=%.2f "
           "evacuate.update_pointers=%.2f "
           "evacuate.update_pointers.slots=%.2f "
+          "evacuate.update_pointers.weak=%.2f "
+          "sweep=%.2f "
+          "sweep.new=%.2f "
+          "sweep.finish_new_space=%.2f "
+          "finish=%.2f "
+          "finish.sweep_array_buffers=%.2f "
           "background.mark=%.2f "
+          "background.sweep=%.2f "
           "background.evacuate.copy=%.2f "
           "background.evacuate.update_pointers=%.2f "
           "background.unmapper=%.2f "
           "unmapper=%.2f "
-          "update_marking_deque=%.2f "
-          "reset_liveness=%.2f\n",
+          "reset_liveness=%.2f "
+          "total_size_before=%zu "
+          "total_size_after=%zu "
+          "holes_size_before=%zu "
+          "holes_size_after=%zu "
+          "allocated=%zu "
+          "promoted=%zu "
+          "new_space_survived=%zu "
+          "nodes_died_in_new=%d "
+          "nodes_copied_in_new=%d "
+          "nodes_promoted=%d "
+          "promotion_ratio=%.1f%% "
+          "average_survival_ratio=%.1f%% "
+          "promotion_rate=%.1f%% "
+          "new_space_survive_rate_=%.1f%% "
+          "new_space_allocation_throughput=%.1f\n",
           duration, spent_in_mutator, "mmc", current_.reduce_memory,
           current_scope(Scope::MINOR_MC),
           current_scope(Scope::TIME_TO_SAFEPOINT),
           current_scope(Scope::MINOR_MC_MARK),
-          current_scope(Scope::MINOR_MC_MARK_SEED),
           current_scope(Scope::MINOR_MC_MARK_ROOTS),
-          current_scope(Scope::MINOR_MC_MARK_WEAK),
+          current_scope(Scope::MINOR_MC_MARK_FINISH_INCREMENTAL),
+          current_scope(Scope::MINOR_MC_MARK_SEED),
+          current_scope(Scope::MINOR_MC_MARK_CLOSURE_PARALLEL),
+          current_scope(Scope::MINOR_MC_MARK_CLOSURE),
           current_scope(Scope::MINOR_MC_MARK_GLOBAL_HANDLES),
           current_scope(Scope::MINOR_MC_CLEAR),
           current_scope(Scope::MINOR_MC_CLEAR_STRING_TABLE),
-          current_scope(Scope::MINOR_MC_CLEAR_WEAK_LISTS),
+          current_scope(Scope::MINOR_MC_COMPLETE_SWEEP_ARRAY_BUFFERS),
           current_scope(Scope::MINOR_MC_EVACUATE),
+          current_scope(Scope::MINOR_MC_EVACUATE_CLEAN_UP),
           current_scope(Scope::MINOR_MC_EVACUATE_COPY),
+          current_scope(Scope::MINOR_MC_EVACUATE_PROLOGUE),
+          current_scope(Scope::MINOR_MC_EVACUATE_EPILOGUE),
+          current_scope(Scope::MINOR_MC_EVACUATE_REBALANCE),
           current_scope(Scope::MINOR_MC_EVACUATE_UPDATE_POINTERS),
           current_scope(Scope::MINOR_MC_EVACUATE_UPDATE_POINTERS_SLOTS),
+          current_scope(Scope::MINOR_MC_EVACUATE_UPDATE_POINTERS_WEAK),
+          current_scope(Scope::MC_SWEEP), current_scope(Scope::MC_SWEEP_NEW),
+          current_scope(Scope::MINOR_MC_SWEEP_FINISH_NEW),
+          current_scope(Scope::MINOR_MC_FINISH),
+          current_scope(Scope::MINOR_MC_FINISH_SWEEP_ARRAY_BUFFERS),
           current_scope(Scope::MINOR_MC_BACKGROUND_MARKING),
+          current_scope(Scope::MINOR_MC_BACKGROUND_SWEEPING),
           current_scope(Scope::MINOR_MC_BACKGROUND_EVACUATE_COPY),
           current_scope(Scope::MINOR_MC_BACKGROUND_EVACUATE_UPDATE_POINTERS),
           current_scope(Scope::BACKGROUND_UNMAPPER),
           current_scope(Scope::UNMAPPER),
-          current_scope(Scope::MINOR_MC_MARKING_DEQUE),
-          current_scope(Scope::MINOR_MC_RESET_LIVENESS));
+          current_scope(Scope::MINOR_MC_RESET_LIVENESS),
+          current_.start_object_size, current_.end_object_size,
+          current_.start_holes_size, current_.end_holes_size,
+          allocated_since_last_gc, heap_->promoted_objects_size(),
+          heap_->new_space_surviving_object_size(),
+          heap_->nodes_died_in_new_space_, heap_->nodes_copied_in_new_space_,
+          heap_->nodes_promoted_, heap_->promotion_ratio_,
+          AverageSurvivalRatio(), heap_->promotion_rate_,
+          heap_->new_space_surviving_rate_,
+          NewSpaceAllocationThroughputInBytesPerMillisecond());
       break;
     case Event::MARK_COMPACTOR:
     case Event::INCREMENTAL_MARK_COMPACTOR:
@@ -912,7 +959,9 @@ void GCTracer::PrintNVP() const {
           "sweep=%.1f "
           "sweep.code=%.1f "
           "sweep.map=%.1f "
+          "sweep.new=%.1f "
           "sweep.old=%.1f "
+          "sweep.finish_new_space=%.2f "
           "incremental=%.1f "
           "incremental.finalize=%.1f "
           "incremental.finalize.external.prologue=%.1f "
@@ -939,14 +988,14 @@ void GCTracer::PrintNVP() const {
           "holes_size_after=%zu "
           "allocated=%zu "
           "promoted=%zu "
-          "semi_space_copied=%zu "
+          "new_space_survived=%zu "
           "nodes_died_in_new=%d "
           "nodes_copied_in_new=%d "
           "nodes_promoted=%d "
           "promotion_ratio=%.1f%% "
           "average_survival_ratio=%.1f%% "
           "promotion_rate=%.1f%% "
-          "semi_space_copy_rate=%.1f%% "
+          "new_space_survive_rate=%.1f%% "
           "new_space_allocation_throughput=%.1f "
           "unmapper_chunks=%d "
           "compaction_speed=%.f\n",
@@ -996,7 +1045,9 @@ void GCTracer::PrintNVP() const {
           current_scope(Scope::MC_PROLOGUE), current_scope(Scope::MC_SWEEP),
           current_scope(Scope::MC_SWEEP_CODE),
           current_scope(Scope::MC_SWEEP_MAP),
+          current_scope(Scope::MC_SWEEP_NEW),
           current_scope(Scope::MC_SWEEP_OLD),
+          current_scope(Scope::MC_SWEEP_FINISH_NEW),
           current_scope(Scope::MC_INCREMENTAL),
           current_scope(Scope::MC_INCREMENTAL_FINALIZE),
           current_scope(Scope::MC_INCREMENTAL_EXTERNAL_PROLOGUE),
@@ -1021,11 +1072,11 @@ void GCTracer::PrintNVP() const {
           current_.end_object_size, current_.start_holes_size,
           current_.end_holes_size, allocated_since_last_gc,
           heap_->promoted_objects_size(),
-          heap_->semi_space_copied_object_size(),
+          heap_->new_space_surviving_object_size(),
           heap_->nodes_died_in_new_space_, heap_->nodes_copied_in_new_space_,
           heap_->nodes_promoted_, heap_->promotion_ratio_,
           AverageSurvivalRatio(), heap_->promotion_rate_,
-          heap_->semi_space_copied_rate_,
+          heap_->new_space_surviving_rate_,
           NewSpaceAllocationThroughputInBytesPerMillisecond(),
           heap_->memory_allocator()->unmapper()->NumberOfChunks(),
           CompactionSpeedInBytesPerMillisecond());

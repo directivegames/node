@@ -14,8 +14,11 @@
 #include "src/execution/vm-state-inl.h"
 #include "src/heap/allocation-observer.h"
 #include "src/heap/array-buffer-sweeper.h"
+#include "src/heap/gc-tracer-inl.h"
+#include "src/heap/gc-tracer.h"
 #include "src/heap/heap.h"
 #include "src/heap/incremental-marking.h"
+#include "src/heap/marking-state-inl.h"
 #include "src/heap/memory-allocator.h"
 #include "src/heap/memory-chunk-inl.h"
 #include "src/heap/memory-chunk-layout.h"
@@ -139,12 +142,14 @@ void PagedSpaceBase::TearDown() {
   accounting_stats_.Clear();
 }
 
-void PagedSpaceBase::RefillFreeList(Sweeper* sweeper) {
+void PagedSpaceBase::RefillFreeList() {
   // Any PagedSpace might invoke RefillFreeList. We filter all but our old
   // generation spaces out.
   DCHECK(identity() == OLD_SPACE || identity() == CODE_SPACE ||
-         identity() == MAP_SPACE || identity() == NEW_SPACE);
+         identity() == MAP_SPACE || identity() == NEW_SPACE ||
+         identity() == SHARED_SPACE);
 
+  Sweeper* sweeper = heap()->sweeper();
   size_t added = 0;
 
   {
@@ -283,8 +288,7 @@ bool PagedSpaceBase::ContainsSlow(Address addr) const {
 
 void PagedSpaceBase::RefineAllocatedBytesAfterSweeping(Page* page) {
   CHECK(page->SweepingDone());
-  auto marking_state =
-      heap()->mark_compact_collector()->non_atomic_marking_state();
+  auto marking_state = heap()->non_atomic_marking_state();
   // The live_byte on the page was accounted in the space allocated
   // bytes counter. After sweeping allocated_bytes() contains the
   // accurate live byte count on the page.
@@ -426,9 +430,14 @@ int PagedSpaceBase::CountTotalPages() const {
 
 void PagedSpaceBase::SetLinearAllocationArea(Address top, Address limit) {
   SetTopAndLimit(top, limit);
-  if (top != kNullAddress && top != limit && identity() != NEW_SPACE &&
-      heap()->incremental_marking()->black_allocation()) {
-    Page::FromAllocationAreaAddress(top)->CreateBlackArea(top, limit);
+  if (top != kNullAddress && top != limit) {
+    Page* page = Page::FromAllocationAreaAddress(top);
+    if (identity() == NEW_SPACE) {
+      page->MarkWasUsedForAllocation();
+    } else if (heap()->incremental_marking()->black_allocation()) {
+      DCHECK_NE(NEW_SPACE, identity());
+      page->CreateBlackArea(top, limit);
+    }
   }
 }
 
@@ -534,17 +543,15 @@ void PagedSpaceBase::FreeLinearAllocationArea() {
         GetUnprotectMemoryOrigin(is_compaction_space()));
   }
 
-  DCHECK_IMPLIES(current_limit - current_top >= 2 * kTaggedSize,
-                 heap()->incremental_marking()->marking_state()->IsWhite(
-                     HeapObject::FromAddress(current_top)));
+  DCHECK_IMPLIES(
+      current_limit - current_top >= 2 * kTaggedSize,
+      heap()->marking_state()->IsWhite(HeapObject::FromAddress(current_top)));
   Free(current_top, current_limit - current_top,
        SpaceAccountingMode::kSpaceAccounted);
 }
 
 void PagedSpaceBase::ReleasePage(Page* page) {
-  DCHECK_EQ(
-      0, heap()->incremental_marking()->non_atomic_marking_state()->live_bytes(
-             page));
+  DCHECK_EQ(0, heap()->non_atomic_marking_state()->live_bytes(page));
   DCHECK_EQ(page->owner(), this);
 
   DCHECK_IMPLIES(identity() == NEW_SPACE, page->IsFlagSet(Page::TO_PAGE));
@@ -655,7 +662,7 @@ PagedSpaceBase::RawAllocateBackground(LocalHeap* local_heap,
                                       AllocationOrigin origin) {
   DCHECK(!is_compaction_space());
   DCHECK(identity() == OLD_SPACE || identity() == CODE_SPACE ||
-         identity() == MAP_SPACE);
+         identity() == MAP_SPACE || identity() == SHARED_SPACE);
   DCHECK(origin == AllocationOrigin::kRuntime ||
          origin == AllocationOrigin::kGC);
   DCHECK_IMPLIES(!local_heap, origin == AllocationOrigin::kGC);
@@ -665,34 +672,38 @@ PagedSpaceBase::RawAllocateBackground(LocalHeap* local_heap,
                                           origin);
   if (result) return result;
 
-  MarkCompactCollector* collector = heap()->mark_compact_collector();
   // Sweeping is still in progress.
-  if (collector->sweeping_in_progress()) {
+  if (heap()->sweeping_in_progress()) {
     // First try to refill the free-list, concurrent sweeper threads
     // may have freed some objects in the meantime.
-    RefillFreeList(collector->sweeper());
+    {
+      TRACE_GC_EPOCH(heap()->tracer(), GCTracer::Scope::MC_BACKGROUND_SWEEPING,
+                     ThreadKind::kBackground);
+      RefillFreeList();
+    }
 
     // Retry the free list allocation.
     result = TryAllocationFromFreeListBackground(min_size_in_bytes,
                                                  max_size_in_bytes, origin);
     if (result) return result;
 
-    if (IsSweepingAllowedOnThread(local_heap)) {
-      // Now contribute to sweeping from background thread and then try to
-      // reallocate.
+    // Now contribute to sweeping from background thread and then try to
+    // reallocate.
+    int max_freed;
+    {
+      TRACE_GC_EPOCH(heap()->tracer(), GCTracer::Scope::MC_BACKGROUND_SWEEPING,
+                     ThreadKind::kBackground);
       const int kMaxPagesToSweep = 1;
-      int max_freed = collector->sweeper()->ParallelSweepSpace(
+      max_freed = heap()->sweeper()->ParallelSweepSpace(
           identity(), Sweeper::SweepingMode::kLazyOrConcurrent,
           static_cast<int>(min_size_in_bytes), kMaxPagesToSweep);
+      RefillFreeList();
+    }
 
-      // Keep new space sweeping atomic.
-      RefillFreeList(collector->sweeper());
-
-      if (static_cast<size_t>(max_freed) >= min_size_in_bytes) {
-        result = TryAllocationFromFreeListBackground(min_size_in_bytes,
-                                                     max_size_in_bytes, origin);
-        if (result) return result;
-      }
+    if (static_cast<size_t>(max_freed) >= min_size_in_bytes) {
+      result = TryAllocationFromFreeListBackground(min_size_in_bytes,
+                                                   max_size_in_bytes, origin);
+      if (result) return result;
     }
   }
 
@@ -702,13 +713,13 @@ PagedSpaceBase::RawAllocateBackground(LocalHeap* local_heap,
     if (result) return result;
   }
 
-  if (collector->sweeping_in_progress()) {
+  if (heap()->sweeping_in_progress()) {
     // Complete sweeping for this space.
-    if (IsSweepingAllowedOnThread(local_heap)) {
-      collector->DrainSweepingWorklistForSpace(identity());
-    }
+    TRACE_GC_EPOCH(heap()->tracer(), GCTracer::Scope::MC_BACKGROUND_SWEEPING,
+                   ThreadKind::kBackground);
+    heap()->DrainSweepingWorklistForSpace(identity());
 
-    RefillFreeList(collector->sweeper());
+    RefillFreeList();
 
     // Last try to acquire memory from free list.
     return TryAllocationFromFreeListBackground(min_size_in_bytes,
@@ -725,7 +736,7 @@ PagedSpaceBase::TryAllocationFromFreeListBackground(size_t min_size_in_bytes,
   base::MutexGuard lock(&space_mutex_);
   DCHECK_LE(min_size_in_bytes, max_size_in_bytes);
   DCHECK(identity() == OLD_SPACE || identity() == CODE_SPACE ||
-         identity() == MAP_SPACE);
+         identity() == MAP_SPACE || identity() == SHARED_SPACE);
 
   size_t new_node_size = 0;
   FreeSpace new_node =
@@ -764,12 +775,6 @@ PagedSpaceBase::TryAllocationFromFreeListBackground(size_t min_size_in_bytes,
   return std::make_pair(start, used_size_in_bytes);
 }
 
-bool PagedSpaceBase::IsSweepingAllowedOnThread(LocalHeap* local_heap) const {
-  // Code space sweeping is only allowed on main thread.
-  return (local_heap && local_heap->is_main_thread()) ||
-         identity() != CODE_SPACE;
-}
-
 #ifdef DEBUG
 void PagedSpaceBase::Print() {}
 #endif
@@ -788,6 +793,7 @@ void PagedSpaceBase::Verify(Isolate* isolate, ObjectVisitor* visitor) const {
   PtrComprCageBase cage_base(isolate);
   for (const Page* page : *this) {
     CHECK_EQ(page->owner(), this);
+    CHECK_IMPLIES(identity() != NEW_SPACE, !page->WasUsedForAllocation());
 
     for (int i = 0; i < kNumTypes; i++) {
       external_page_bytes[static_cast<ExternalBackingStoreType>(i)] = 0;
@@ -866,7 +872,7 @@ void PagedSpaceBase::Verify(Isolate* isolate, ObjectVisitor* visitor) const {
 }
 
 void PagedSpaceBase::VerifyLiveBytes() const {
-  MarkingState* marking_state = heap()->incremental_marking()->marking_state();
+  MarkingState* marking_state = heap()->marking_state();
   PtrComprCageBase cage_base(heap()->isolate());
   for (const Page* page : *this) {
     CHECK(page->SweepingDone());
@@ -895,7 +901,7 @@ void PagedSpaceBase::VerifyCountersAfterSweeping(Heap* heap) const {
     size_t real_allocated = 0;
     for (HeapObject object = it.Next(); !object.is_null(); object = it.Next()) {
       if (!object.IsFreeSpaceOrFiller()) {
-        real_allocated += object.Size(cage_base);
+        real_allocated += ALIGN_TO_ALLOCATION_ALIGNMENT(object.Size(cage_base));
       }
     }
     total_allocated += page->allocated_bytes();
@@ -911,8 +917,7 @@ void PagedSpaceBase::VerifyCountersAfterSweeping(Heap* heap) const {
 void PagedSpaceBase::VerifyCountersBeforeConcurrentSweeping() const {
   size_t total_capacity = 0;
   size_t total_allocated = 0;
-  auto marking_state =
-      heap()->incremental_marking()->non_atomic_marking_state();
+  auto marking_state = heap()->non_atomic_marking_state();
   for (const Page* page : *this) {
     size_t page_allocated =
         page->SweepingDone()
@@ -989,21 +994,33 @@ bool PagedSpaceBase::RawRefillLabMain(int size_in_bytes,
     return false;
   }
 
-  MarkCompactCollector* collector = heap()->mark_compact_collector();
+  const bool is_main_thread =
+      heap()->IsMainThread() || heap()->IsSharedMainThread();
+  const auto sweeping_scope_id = is_main_thread
+                                     ? GCTracer::Scope::MC_SWEEP
+                                     : GCTracer::Scope::MC_BACKGROUND_SWEEPING;
+  const auto sweeping_scope_kind =
+      is_main_thread ? ThreadKind::kMain : ThreadKind::kBackground;
   // Sweeping is still in progress.
-  if (collector->sweeping_in_progress()) {
+  if (heap()->sweeping_in_progress()) {
     // First try to refill the free-list, concurrent sweeper threads
     // may have freed some objects in the meantime.
-    RefillFreeList(collector->sweeper());
+    {
+      TRACE_GC_EPOCH(heap()->tracer(), sweeping_scope_id, sweeping_scope_kind);
+      RefillFreeList();
+    }
 
     // Retry the free list allocation.
     if (TryAllocationFromFreeListMain(static_cast<size_t>(size_in_bytes),
                                       origin))
       return true;
 
-    if (ContributeToSweepingMain(size_in_bytes, kMaxPagesToSweep, size_in_bytes,
-                                 origin))
-      return true;
+    {
+      TRACE_GC_EPOCH(heap()->tracer(), sweeping_scope_id, sweeping_scope_kind);
+      if (ContributeToSweepingMain(size_in_bytes, kMaxPagesToSweep,
+                                   size_in_bytes, origin))
+        return true;
+    }
   }
 
   if (is_compaction_space()) {
@@ -1029,8 +1046,9 @@ bool PagedSpaceBase::RawRefillLabMain(int size_in_bytes,
   }
 
   // Try sweeping all pages.
-  if (ContributeToSweepingMain(0, 0, size_in_bytes, origin)) {
-    return true;
+  {
+    TRACE_GC_EPOCH(heap()->tracer(), sweeping_scope_id, sweeping_scope_kind);
+    if (ContributeToSweepingMain(0, 0, size_in_bytes, origin)) return true;
   }
 
   if (heap()->gc_state() != Heap::NOT_IN_GC && !heap()->force_oom()) {
@@ -1054,11 +1072,10 @@ bool PagedSpaceBase::ContributeToSweepingMain(int required_freed_bytes,
       is_compaction_space() ? Sweeper::SweepingMode::kEagerDuringGC
                             : Sweeper::SweepingMode::kLazyOrConcurrent;
 
-  MarkCompactCollector* collector = heap()->mark_compact_collector();
-  if (collector->sweeping_in_progress()) {
-    collector->sweeper()->ParallelSweepSpace(identity(), sweeping_mode,
-                                             required_freed_bytes, max_pages);
-    RefillFreeList(collector->sweeper());
+  if (heap()->sweeping_in_progress()) {
+    heap()->sweeper()->ParallelSweepSpace(identity(), sweeping_mode,
+                                          required_freed_bytes, max_pages);
+    RefillFreeList();
     return TryAllocationFromFreeListMain(size_in_bytes, origin);
   }
   return false;

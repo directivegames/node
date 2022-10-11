@@ -115,6 +115,11 @@ class V8_EXPORT_PRIVATE LocalHeap {
   void MarkLinearAllocationAreaBlack();
   void UnmarkLinearAllocationArea();
 
+  // Mark/Unmark linear allocation areas in shared heap black. Used for black
+  // allocation.
+  void MarkSharedLinearAllocationAreaBlack();
+  void UnmarkSharedLinearAllocationArea();
+
   // Give up linear allocation areas. Used for mark-compact GC.
   void FreeLinearAllocationArea();
 
@@ -157,9 +162,6 @@ class V8_EXPORT_PRIVATE LocalHeap {
     return heap_->deserialization_complete();
   }
   ReadOnlySpace* read_only_space() { return heap_->read_only_space(); }
-
-  // Requests GC and blocks until the collection finishes.
-  bool TryPerformCollection();
 
   // Adds a callback that is invoked with the given |data| after each GC.
   // The callback is invoked on the main thread before any background thread

@@ -20,7 +20,6 @@
 #include "src/utils/utils.h"
 #include "src/wasm/decoder.h"
 #include "src/wasm/function-body-decoder-impl.h"
-#include "src/wasm/function-body-decoder.h"
 #include "src/wasm/memory-tracing.h"
 #include "src/wasm/module-compiler.h"
 #include "src/wasm/wasm-arguments.h"
@@ -3668,8 +3667,7 @@ class WasmInterpreterInternals {
             FOREACH_WASMVALUE_CTYPES(CASE_TYPE)
 #undef CASE_TYPE
             case kRef:
-            case kRefNull:
-            case kRtt: {
+            case kRefNull: {
               // TODO(7748): Type checks or DCHECKs for ref types?
               HandleScope handle_scope(isolate_);  // Avoid leaking handles.
               Handle<FixedArray> global_buffer;    // The buffer of the global.
@@ -3681,6 +3679,7 @@ class WasmInterpreterInternals {
               global_buffer->set(global_index, *ref);
               break;
             }
+            case kRtt:
             case kI8:
             case kI16:
             case kVoid:
@@ -4103,13 +4102,7 @@ class WasmInterpreterInternals {
                                   uint32_t sig_index) {
     HandleScope handle_scope(isolate_);  // Avoid leaking handles.
     uint32_t expected_sig_id;
-    if (v8_flags.wasm_type_canonicalization) {
-      expected_sig_id = module()->isorecursive_canonical_type_ids[sig_index];
-    } else {
-      expected_sig_id = module()->per_module_canonical_type_ids[sig_index];
-      DCHECK_EQ(static_cast<int>(expected_sig_id),
-                module()->signature_map.Find(*module()->signature(sig_index)));
-    }
+    expected_sig_id = module()->isorecursive_canonical_type_ids[sig_index];
 
     Handle<WasmIndirectFunctionTable> table =
         instance_object_->GetIndirectFunctionTable(isolate_, table_index);
@@ -4246,7 +4239,6 @@ ControlTransferMap WasmInterpreter::ComputeControlTransfersForTesting(
                         0,       // func_index
                         0,       // sig_index
                         {0, 0},  // code
-                        0,       // feedback slots
                         false,   // imported
                         false,   // exported
                         false};  // declared
