@@ -71,6 +71,9 @@ set doc=
 set extra_msbuild_args=
 set exit_code=0
 
+:: WITH_DIRECTIVE
+set shared_zlib=0
+
 :next-arg
 if "%1"=="" goto args-done
 if /i "%1"=="debug"         set config=Debug&goto arg-ok
@@ -146,6 +149,9 @@ if /i "%1"=="openssl-no-asm"   set openssl_no_asm=1&goto arg-ok
 if /i "%1"=="doc"           set doc=1&goto arg-ok
 if /i "%1"=="binlog"        set extra_msbuild_args=/binaryLogger:%config%\node.binlog&goto arg-ok
 
+:: WITH_DIRECTIVE
+if /i "%1"=="shared-zlib"   set shared_zlib=1&goto arg-ok
+
 echo Error: invalid command line option `%1`.
 exit /b 1
 
@@ -197,6 +203,10 @@ if defined config_flags     set configure_flags=%configure_flags% %config_flags%
 if defined target_arch      set configure_flags=%configure_flags% --dest-cpu=%target_arch%
 if defined openssl_no_asm   set configure_flags=%configure_flags% --openssl-no-asm
 if defined DEBUG_HELPER     set configure_flags=%configure_flags% --verbose
+
+:: WITH_DIRECTIVE
+if defined shared_zlib     set configure_flags=%configure_flags% --shared_zlib
+
 if "%target_arch%"=="x86" if "%PROCESSOR_ARCHITECTURE%"=="AMD64" set configure_flags=%configure_flags% --no-cross-compiling
 if "%target_arch%"=="arm64" set configure_flags=%configure_flags% --cross-compiling
 
