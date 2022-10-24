@@ -205,7 +205,7 @@ if defined openssl_no_asm   set configure_flags=%configure_flags% --openssl-no-a
 if defined DEBUG_HELPER     set configure_flags=%configure_flags% --verbose
 
 :: WITH_DIRECTIVE
-if defined shared_zlib     set configure_flags=%configure_flags% --shared_zlib
+if defined shared_zlib     set configure_flags=%configure_flags% --shared-zlib
 
 if "%target_arch%"=="x86" if "%PROCESSOR_ARCHITECTURE%"=="AMD64" set configure_flags=%configure_flags% --no-cross-compiling
 if "%target_arch%"=="arm64" set configure_flags=%configure_flags% --cross-compiling
