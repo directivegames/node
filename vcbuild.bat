@@ -73,6 +73,9 @@ set exit_code=0
 
 :: WITH_DIRECTIVE
 set shared_zlib=0
+set shared_zlib_libname=
+set shared_zlib_libpath=
+set shared_zlib_includes=
 
 :next-arg
 if "%1"=="" goto args-done
@@ -151,6 +154,9 @@ if /i "%1"=="binlog"        set extra_msbuild_args=/binaryLogger:%config%\node.b
 
 :: WITH_DIRECTIVE
 if /i "%1"=="shared-zlib"   set shared_zlib=1&goto arg-ok
+if /i "%1"=="shared-zlib-libname"   set shared_zlib_libname=%2&goto arg-ok-2
+if /i "%1"=="shared-zlib-libpath"   set shared_zlib_libpath=%2&goto arg-ok-2
+if /i "%1"=="shared-zlib-includes"   set shared_zlib_includes=%2&goto arg-ok-2
 
 echo Error: invalid command line option `%1`.
 exit /b 1
@@ -205,7 +211,11 @@ if defined openssl_no_asm   set configure_flags=%configure_flags% --openssl-no-a
 if defined DEBUG_HELPER     set configure_flags=%configure_flags% --verbose
 
 :: WITH_DIRECTIVE
-if defined shared_zlib     set configure_flags=%configure_flags% --shared-zlib
+if defined shared_zlib            set configure_flags=%configure_flags% --shared-zlib
+if defined shared_zlib_includes   set configure_flags=%configure_flags% --shared-zlib-includes %shared_zlib_includes%
+if defined shared_zlib_libname    set configure_flags=%configure_flags% --shared-zlib-libname %shared_zlib_libname%
+if defined shared_zlib_libpath    set configure_flags=%configure_flags% --shared-zlib-libpath %shared_zlib_libpath%
+
 
 if "%target_arch%"=="x86" if "%PROCESSOR_ARCHITECTURE%"=="AMD64" set configure_flags=%configure_flags% --no-cross-compiling
 if "%target_arch%"=="arm64" set configure_flags=%configure_flags% --cross-compiling
